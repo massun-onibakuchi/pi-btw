@@ -1043,6 +1043,7 @@ function buildOverlayTranscript(
   theme: ExtensionContext["ui"]["theme"],
   markdownTheme: MarkdownTheme,
   contentWidth: number,
+  quietTranscript: boolean,
 ): string[] {
   if (entries.length === 0) {
     return [theme.fg("dim", "No BTW thread yet. Ask a side question to start one.")];
@@ -1114,6 +1115,7 @@ function buildOverlayTranscript(
     }
 
     if (entry.type === "thinking") {
+      if (quietTranscript) continue;
       const thinkingHeader = entry.streaming ? `${thinkingBadge} ${theme.fg("warning", "▍")}` : thinkingBadge;
       const markdownLines = new Markdown(entry.text, 0, 0, markdownTheme, {
         color: (text: string) => theme.fg("warning", text),
@@ -1137,6 +1139,10 @@ function buildOverlayTranscript(
     }
 
     if (entry.type === "tool-result") {
+      if (quietTranscript) {
+        if (entry.isError) lines.push(theme.fg("error", `${blockIndent}↳ error`));
+        continue;
+      }
       const resultHeaderLabel = entry.isError
         ? theme.fg("error", "↳ error")
         : entry.streaming
@@ -1379,6 +1385,7 @@ export class BtwOverlayComponent extends Container implements Focusable {
     onToggleWidth: () => void,
     getWorkspaceLabel: () => string = () => "local",
     private readonly fullscreen = false,
+    private readonly quietTranscript = false,
   ) {
     super();
     this.tui = tui;
@@ -1719,6 +1726,7 @@ export class BtwOverlayComponent extends Container implements Focusable {
       this.theme,
       this.markdownTheme,
       this.contentWidth,
+      this.quietTranscript,
     );
   }
 
@@ -1755,6 +1763,7 @@ export default function (pi: ExtensionAPI) {
   let overlayStatus: string | null = null;
   let overlayDraft = "";
   let fullscreen = false;
+  let quietTranscript = false;
   let overlayWidthMode: BtwOverlayWidthMode = "window";
   let overlayRuntime: OverlayRuntime | null = null;
   let lastUiContext: ExtensionContext | ExtensionCommandContext | null = null;
@@ -2327,6 +2336,7 @@ export default function (pi: ExtensionAPI) {
             },
             () => activeBtwSession?.workspace?.label ?? "local",
             fullscreen,
+            quietTranscript,
           );
 
           overlay.focused = focusOnOpen;
@@ -3037,6 +3047,7 @@ export default function (pi: ExtensionAPI) {
       try {
         const config = await readConfig(join(getAgentDir(), "btw.json"), false);
         fullscreen = config?.fullscreen === true;
+        quietTranscript = config?.quietTranscript === true;
         overlayWidthMode = fullscreen ? "full" : "window";
       } catch (error) {
         notify(ctx, error instanceof Error ? error.message : String(error), "warning");

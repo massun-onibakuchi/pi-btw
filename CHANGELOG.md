@@ -8,6 +8,8 @@ All notable changes to this project are documented here.
 - Set `"fullscreen": true` in the user agent directory's `btw.json` to open
   BTW across the terminal viewport. `Alt+w` switches to the framed layout
   without losing the draft or taking focus back from the main composer.
+- Set `"quietTranscript": true` in the user agent directory's `btw.json` to
+  hide reasoning and tool output in the overlay without disabling either.
 
 ## [0.8.1] - 2026-11-03
 
