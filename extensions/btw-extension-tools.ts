@@ -1,55 +1,12 @@
-import { readFile, realpath } from "node:fs/promises";
-import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { realpath } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import {
   DefaultPackageManager,
   DefaultResourceLoader,
   SettingsManager,
   type ResourceLoader,
 } from "@earendil-works/pi-coding-agent";
-
-/** Resolve local paths relative to the config that owns them, not process.cwd(). */
-function resolveSource(source: string, configPath: string): string {
-  if (source.startsWith("npm:") || source.startsWith("git:")) return source;
-  if (source.startsWith("~/")) return join(homedir(), source.slice(2));
-  return resolve(dirname(configPath), source);
-}
-
-type BtwConfig = { extensions?: string[]; workspace?: "local" | "ssh" };
-
-async function readConfig(path: string, includeExtensions = true): Promise<BtwConfig | undefined> {
-  let text: string;
-  try {
-    text = await readFile(path, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    throw new Error(`Cannot read BTW config ${path}: ${error instanceof Error ? error.message : String(error)}`);
-  }
-
-  let config: unknown;
-  try {
-    config = JSON.parse(text);
-  } catch {
-    throw new Error(`Invalid BTW config ${path}: expected JSON.`);
-  }
-  if (!config || typeof config !== "object" || Array.isArray(config)) {
-    throw new Error(`Invalid BTW config ${path}: expected an object.`);
-  }
-  const fields = Object.keys(config);
-  if (fields.some((field) => field !== "extensions" && field !== "workspace")) {
-    throw new Error(`Invalid BTW config ${path}: only "extensions" and "workspace" keys are supported.`);
-  }
-  if ("workspace" in config && config.workspace !== "local" && config.workspace !== "ssh") {
-    throw new Error(`Invalid BTW config ${path}: "workspace" must be "local" or "ssh".`);
-  }
-  if (includeExtensions && "extensions" in config && (!Array.isArray(config.extensions) || config.extensions.some((source) => typeof source !== "string" || !source.trim()))) {
-    throw new Error(`Invalid BTW config ${path}: "extensions" must be an array of nonempty source strings.`);
-  }
-  return {
-    ...(includeExtensions && "extensions" in config && Array.isArray(config.extensions) ? { extensions: [...new Set(config.extensions.map((source: string) => resolveSource(source.trim(), path)))] } : {}),
-    ...("workspace" in config ? { workspace: config.workspace as "local" | "ssh" } : {}),
-  };
-}
+import { readConfig } from "./btw-config";
 
 /** Project lists replace global lists, including an explicit empty list. */
 export async function readBtwExtensionSources(options: {

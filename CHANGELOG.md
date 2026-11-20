@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here.
 
+## [Unreleased]
+
+### Added
+- Set `"fullscreen": true` in the user agent directory's `btw.json` to open
+  BTW across the terminal viewport. `Alt+w` switches to the framed layout
+  without losing the draft or taking focus back from the main composer.
+
 ## [0.8.1] - 2026-11-03
 
 Supports Pi 0.85.1 through 1.x. Tested with Pi 0.85.1 and 1.5.0.

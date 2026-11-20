@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import {
   buildSessionContext,
   createAgentSession,
@@ -40,6 +41,7 @@ import {
   type TUI,
 } from "@earendil-works/pi-tui";
 import { loadBtwExtensionResources, readBtwExtensionSources, readBtwWorkspaceMode } from "./btw-extension-tools";
+import { readConfig } from "./btw-config";
 import { createBtwSshWorkspace, type BtwSshWorkspace } from "./btw-ssh-workspace";
 
 export const BTW_COMMANDS = [
@@ -1376,6 +1378,7 @@ export class BtwOverlayComponent extends Container implements Focusable {
     onUnfocus: () => void,
     onToggleWidth: () => void,
     getWorkspaceLabel: () => string = () => "local",
+    private readonly fullscreen = false,
   ) {
     super();
     this.tui = tui;
@@ -1472,10 +1475,10 @@ export class BtwOverlayComponent extends Container implements Focusable {
     return true;
   }
 
-  private completionRows(): string[] {
+  private completionRows(limit: number): string[] {
     this.updateCompletions();
-    const start = Math.max(0, this.completionIndex - 4);
-    return this.completionItems.slice(start, start + 5).map((command, index) => {
+    const start = Math.max(0, this.completionIndex - limit + 1);
+    return this.completionItems.slice(start, start + limit).map((command, index) => {
       const selected = start + index === this.completionIndex;
       return this.theme.fg(selected ? "accent" : "dim",
         `${selected ? "→" : " "} /${command.name}  ${command.description}`);
@@ -1527,8 +1530,12 @@ export class BtwOverlayComponent extends Container implements Focusable {
   }
 
   private getDialogHeight(): number {
-    const terminalRows = process.stdout.rows ?? 30;
-    return Math.max(18, Math.min(32, Math.floor(terminalRows * 0.78)));
+    const rows = this.tui.terminal?.rows ?? process.stdout.rows ?? 30;
+    const windowHeight = Math.max(18, Math.min(32, Math.floor(rows * 0.78)));
+    if (!this.fullscreen) return windowHeight;
+    if (this.getWidthMode() === "window") return Math.max(1, Math.min(rows - 1, windowHeight));
+    // Keep the main composer and footer visible when it owns focus.
+    return Math.max(1, rows - (this.focused ? 0 : 4));
   }
 
   private scrollTranscript(delta: number): void {
@@ -1620,9 +1627,9 @@ export class BtwOverlayComponent extends Container implements Focusable {
   }
 
   override render(width: number): string[] {
-    const dialogWidth = Math.max(24, width);
+    const dialogWidth = Math.max(this.borderless ? 1 : 3, width);
     const borderColumns = this.borderless ? 0 : 2;
-    const innerWidth = Math.max(22, dialogWidth - borderColumns);
+    const innerWidth = dialogWidth - borderColumns;
     const contentWidth = Math.max(1, innerWidth - BTW_BLOCK_INDENT.length);
     if (contentWidth !== this.contentWidth) {
       this.contentWidth = contentWidth;
@@ -1630,9 +1637,11 @@ export class BtwOverlayComponent extends Container implements Focusable {
     }
     const transcriptLines = this.wrapTranscript(innerWidth);
     const dialogHeight = this.getDialogHeight();
-    const chromeHeight = BTW_OVERLAY_CHROME_LINES;
-    const completionRows = this.completionRows();
-    const transcriptHeight = Math.max(1, dialogHeight - chromeHeight - completionRows.length);
+    const minimalChrome = dialogHeight <= BTW_OVERLAY_CHROME_LINES;
+    const chromeHeight = minimalChrome ? Math.min(dialogHeight, 3) : BTW_OVERLAY_CHROME_LINES;
+    const bodyHeight = dialogHeight - chromeHeight;
+    const completionRows = this.completionRows(Math.min(5, Math.max(0, bodyHeight - 1)));
+    const transcriptHeight = bodyHeight - completionRows.length;
     this.transcriptViewportHeight = transcriptHeight;
 
     const maxScroll = Math.max(0, transcriptLines.length - transcriptHeight);
@@ -1657,11 +1666,14 @@ export class BtwOverlayComponent extends Container implements Focusable {
         ? `${this.summaryTextValue.trim()} · ↑${hiddenAbove} ↓${hiddenBelow}`
         : this.summaryTextValue.trim();
 
-    const lines = [this.borderLine(innerWidth, "top")];
-
-    lines.push(this.frameLine(this.theme.fg("accent", this.theme.bold(this.modeTextValue.trim())), innerWidth));
-    lines.push(this.frameLine(this.theme.fg("dim", summary), innerWidth));
-    lines.push(this.ruleLine(innerWidth));
+    const title = this.theme.fg("accent", this.theme.bold(this.modeTextValue.trim()));
+    const lines: string[] = [];
+    if (!minimalChrome) {
+      lines.push(this.borderLine(innerWidth, "top"), this.frameLine(title, innerWidth));
+      lines.push(this.frameLine(this.theme.fg("dim", summary), innerWidth), this.ruleLine(innerWidth));
+    } else if (dialogHeight >= 3) {
+      lines.push(this.frameLine(title, innerWidth));
+    }
 
     for (const line of visibleTranscript) {
       lines.push(this.frameLine(line, innerWidth));
@@ -1670,12 +1682,16 @@ export class BtwOverlayComponent extends Container implements Focusable {
       lines.push(this.frameLine("", innerWidth));
     }
 
-    lines.push(this.ruleLine(innerWidth));
-    lines.push(this.frameLine(this.theme.fg("warning", this.statusTextValue.trim()), innerWidth));
+    if (!minimalChrome) lines.push(this.ruleLine(innerWidth));
+    if (dialogHeight >= 2) {
+      lines.push(this.frameLine(this.theme.fg("warning", this.statusTextValue.trim()), innerWidth));
+    }
     for (const row of completionRows) lines.push(this.frameLine(row, innerWidth));
     lines.push(this.inputFrameLine(dialogWidth));
-    lines.push(this.frameLine(this.theme.fg("dim", this.hintsTextValue.trim()), innerWidth));
-    lines.push(this.borderLine(innerWidth, "bottom"));
+    if (!minimalChrome) {
+      lines.push(this.frameLine(this.theme.fg("dim", this.hintsTextValue.trim()), innerWidth));
+      lines.push(this.borderLine(innerWidth, "bottom"));
+    }
 
     return lines.map((line) => this.fitRenderedLine(line, width));
   }
@@ -1724,7 +1740,7 @@ export class BtwOverlayComponent extends Container implements Focusable {
     const status = this.getStatus() ?? "Ready. Enter submits; Escape dismisses without clearing.";
     this.statusTextValue = status;
     this.statusText.setText(this.statusTextValue);
-    this.hintsTextValue = `↑↓ select/scroll · Tab complete · Enter · ${BTW_FOCUS_SHORTCUTS_LABEL} focus · Alt+w width · Esc`;
+    this.hintsTextValue = `↑↓ select/scroll · Tab complete · Enter · ${BTW_FOCUS_SHORTCUTS_LABEL} focus · Alt+w ${this.fullscreen ? "layout" : "width"} · Esc`;
     this.hintsText.setText(this.hintsTextValue);
     this.tui.requestRender();
   }
@@ -1738,6 +1754,7 @@ export default function (pi: ExtensionAPI) {
   let transcriptState = createEmptyTranscriptState();
   let overlayStatus: string | null = null;
   let overlayDraft = "";
+  let fullscreen = false;
   let overlayWidthMode: BtwOverlayWidthMode = "window";
   let overlayRuntime: OverlayRuntime | null = null;
   let lastUiContext: ExtensionContext | ExtensionCommandContext | null = null;
@@ -1800,19 +1817,15 @@ export default function (pi: ExtensionAPI) {
   }
 
   function getOverlayOptions(): OverlayOptions {
-    const base: OverlayOptions = {
-      minWidth: 72,
-      maxHeight: "78%",
-      anchor: "top-center",
-      nonCapturing: true,
-    };
+    const base: OverlayOptions = { anchor: "top-center", nonCapturing: true };
+    if (!fullscreen) base.maxHeight = "78%";
     if (overlayWidthMode === "full") {
       // Edge-to-edge so a terminal Shift+drag selection captures only the
       // dialog's own text — nothing from the main screen sits beside it.
-      return { ...base, width: "100%", margin: { top: 1 } };
+      return { ...base, width: "100%", margin: fullscreen ? 0 : { top: 1 } };
     }
     // Framed "window" look: narrower, inset from the terminal edges.
-    return { ...base, width: "78%", margin: { top: 1, left: 2, right: 2 } };
+    return { ...base, width: "78%", minWidth: 72, margin: { top: 1, left: 2, right: 2 } };
   }
 
   async function toggleOverlayWidth(ctx: ExtensionContext | ExtensionCommandContext): Promise<void> {
@@ -1823,17 +1836,12 @@ export default function (pi: ExtensionAPI) {
     // the draft into overlayDraft, and ensureOverlay restores it on reopen.
     const wasFocused = overlayRuntime?.handle?.isFocused() ?? true;
     dismissOverlay();
-    await ensureOverlay(ctx);
-    if (!wasFocused) {
-      overlayRuntime?.handle?.unfocus();
-      overlayRuntime?.refresh?.();
-    }
-    setOverlayStatus(
-      overlayWidthMode === "full"
+    await ensureOverlay(ctx, wasFocused);
+    if (!fullscreen) {
+      setOverlayStatus(overlayWidthMode === "full"
         ? "Full-width mode. Shift+drag now selects only the dialog. Alt+w to restore the window."
-        : "Window mode. Alt+w switches to full-width for clean copy selection.",
-      ctx,
-    );
+        : "Window mode. Alt+w switches to full-width for clean copy selection.", ctx);
+    }
   }
 
   function removeBtwSessionSubscription(sessionRuntime: BtwSessionRuntime, unsubscribe: () => void): void {
@@ -2259,7 +2267,7 @@ export default function (pi: ExtensionAPI) {
     return activeBtwSession;
   }
 
-  async function ensureOverlay(ctx: ExtensionCommandContext | ExtensionContext): Promise<void> {
+  async function ensureOverlay(ctx: ExtensionCommandContext | ExtensionContext, focusOnOpen = true): Promise<void> {
     if (!canRenderBtwOverlay(ctx)) {
       return;
     }
@@ -2318,9 +2326,10 @@ export default function (pi: ExtensionAPI) {
               void toggleOverlayWidth(ctx);
             },
             () => activeBtwSession?.workspace?.label ?? "local",
+            fullscreen,
           );
 
-          overlay.focused = runtime.handle?.isFocused() ?? true;
+          overlay.focused = focusOnOpen;
           overlay.setDraft(overlayDraft);
           runtime.setDraft = (value) => {
             overlay.setDraft(value);
@@ -2347,7 +2356,7 @@ export default function (pi: ExtensionAPI) {
           overlayOptions: getOverlayOptions(),
           onHandle: (handle) => {
             runtime.handle = handle;
-            handle.focus();
+            if (focusOnOpen) handle.focus();
             if (runtime.closed) {
               closeRuntime();
             }
@@ -3024,6 +3033,15 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("session_start", async (_event, ctx) => {
+    if (canRenderBtwOverlay(ctx)) {
+      try {
+        const config = await readConfig(join(getAgentDir(), "btw.json"), false);
+        fullscreen = config?.fullscreen === true;
+        overlayWidthMode = fullscreen ? "full" : "window";
+      } catch (error) {
+        notify(ctx, error instanceof Error ? error.message : String(error), "warning");
+      }
+    }
     await restoreThread(ctx);
   });
 
@@ -3047,7 +3065,7 @@ export default function (pi: ExtensionAPI) {
   }
 
   pi.registerShortcut(BTW_WIDTH_TOGGLE_SHORTCUT, {
-    description: "Toggle the BTW overlay between window and full-width layouts.",
+    description: "Toggle between the framed and expanded BTW layouts.",
     handler: async () => {
       if (!overlayRuntime || !lastUiContext) {
         return;
